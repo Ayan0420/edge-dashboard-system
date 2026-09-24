@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Service Architecture Diagrams</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({ 
+            startOnLoad: true, 
+            theme: 'base',
+            securityLevel: 'loose',
+            themeVariables: {
+                fontFamily: 'Inter, sans-serif',
+                primaryColor: '#f8fafc',
+                primaryTextColor: '#0f172a',
+                primaryBorderColor: '#cbd5e1',
+                lineColor: '#64748b',
+                secondaryColor: '#eff6ff',
+                tertiaryColor: '#f1f5f9',
+                noteBkgColor: '#fef3c7',
+                noteTextColor: '#92400e',
+                noteBorderColor: '#f59e0b'
+            }
+        });
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f1f5f9;
+        }
+        .diagram-container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            margin-bottom: 2rem;
+            padding: 2rem;
+            overflow-x: auto;
+        }
+        .mermaid {
+            display: flex;
+            justify-content: center;
+        }
+    </style>
+</head>
+<body class="text-slate-800 p-8">
+
+    <div class="max-w-6xl mx-auto">
+        <header class="mb-10">
+            <h1 class="text-4xl font-bold text-slate-900 mb-2">Dashboard Service Architecture</h1>
+            <p class="text-lg text-slate-600">Visualizing the data boundaries, compute paths, and authorization flows.</p>
+        </header>
+
+        <!-- 1. Overall System Architecture -->
+        <section>
+            <h2 class="text-2xl font-semibold mb-4 text-slate-800 border-b pb-2">1. Overall System Overview</h2>
+            <p class="text-slate-600 mb-6">
+                The complete architecture showing how the core app communicates through the proxy to the dashboard service, interacting with cache, queues, and the tenant databases. The <strong>WidgetHost</strong> acts as the origin for both standard read and manual refresh requests.
+                <br/><span class="inline-block mt-2 text-sm font-medium bg-slate-100 px-3 py-1 rounded">
+                    <span class="text-emerald-600">■ Read Path</span> &nbsp;|&nbsp; 
+                    <span class="text-purple-600">■ Layout Path</span> &nbsp;|&nbsp; 
+                    <span class="text-orange-600">■ Refresh Path</span> &nbsp;|&nbsp; 
+                    <span class="text-blue-600">■ Scheduling & Compute</span>
+                </span>
+            </p>
+            
+            <div class="diagram-container">
+                <div class="mermaid">
+                    flowchart TB
+                        subgraph Client ["Browser / Client"]
+                            WH["WidgetHost (core-app)"]
+                            BUILD["Dashboard Builder"]
+                        end
+
+                        subgraph CoreAPI ["core-api (Proxy & Auth)"]
+                            PROXY["Dashboard Proxy"]
+                            INTRO["Token Introspection\n(User + Permissions)"]
+                        end
+
+                        subgraph DashService ["dashboard-service"]
+                            AUTHM["Auth Middleware\n(Scope Narrowing)"]
+                            GEN["Generic Read Endpoint"]
+                            REF["Refresh Endpoint"]
+                            LAYS["Layout Service"]
+                            DISP["Schedule Registrar\n(api role)"]
+                            PROC["Queue Consumers\n(worker role)"]
+                            RUN["Execute Calculator\n(Pure Function)"]
+                        end
+
+                        subgraph Cache ["In-Memory Data"]
+                            MC[("Memcached\n(Result Cache)")]
+                            RDS[("Redis\n(BullMQ Queues)")]
+                        end
+
+                        subgraph TenantDB ["Tenant Database (Atlas)"]
+                            COLS[("Domain Collections")]
+                            RES[("dashboardWidgetResults")]
+                            LAY[("Dashboard Layouts")]
+                        end
+
+                        %% Connections
+                        WH -->|"Batch Request (Read & Refresh)\n(Session Cookie)"| PROXY
+                        BUILD -->|"Save Layout"| PROXY
+                        PROXY -->|"Forward Bearer Token"| AUTHM
+                        AUTHM -->|"POST Token\nM2M Auth"| INTRO
+                        INTRO -.->|"Permissions"| AUTHM
+                        
+                        AUTHM --> GEN
+                        AUTHM --> REF
+                        PROXY --> LAYS
+
+                        GEN -->|"1. Lookup (Warm = 0 DB Ops)"| MC
+                        GEN -->|"2. Misses"| RES
+                        GEN -->|"3. Still Missing (Enqueue)"| RDS
+
+                        LAYS -->|"Write Layout"| LAY
+                        LAYS -->|"Enqueue new placements"| RDS
+
+                        REF -->|"Invalidate Cache"| MC
+                        REF -->|"Enqueue Priority Job"| RDS
+
+                        DISP -->|"Register schedules"| RDS
+                        RDS -->|"Jittered Tick"| PROC
+                        PROC --> RUN
+                        
+                        RUN -->|"Read (Secondary)"| COLS
+                        RUN -->|"Write Result Row"| RES
+                        RUN -->|"Write-through Invalidate"| MC
+
+                        %% Styling paths (0-indexed in Mermaid linkStyles)
+                        %% Link 0 and 2 are shared ingress paths for read/refresh (slate)
+                        linkStyle 0,2 stroke:#475569,stroke-width:2px;
+                        %% Read Path (Green)
+                        linkStyle 5,8,9,10 stroke:#059669,stroke-width:3px;
+                        %% Layout Path (Purple)
+                        linkStyle 1,7,11,12 stroke:#7c3aed,stroke-width:3px;
+                        %% Refresh Path (Orange)
+                        linkStyle 6,13,14 stroke:#ea580c,stroke-width:3px;
+                        %% Scheduling/Compute Path (Blue)
+                        linkStyle 15,16,17,18,19,20 stroke:#2563eb,stroke-width:3px;
+                </div>
+            </div>
+        </section>
+
+        <!-- 2. The Read Path -->
+        <section>
+            <h2 class="text-2xl font-semibold mb-4 text-slate-800 border-b pb-2">2. The Read Path (Browser to Row)</h2>
+            <p class="text-slate-600 mb-6">A warm dashboard load costs zero database operations. Cache is checked only after strict authorization and scope narrowing. The initial WidgetHost request acts as the trigger for both reads and targeted refreshes.</p>
+            
+            <div class="diagram-container">
+                <div class="mermaid">
+                    flowchart LR
+                        WH["WidgetHost"]
+                        PROXY["core-api proxy"]
+                        AUTH["dashboard-service\nAuth & Scope"]
+                        GEN["Generic Endpoint"]
+                        MC[("Memcached")]
+                        RES[("dashboardWidgetResults\n(Tenant DB)")]
+                        RDS[("Redis\n(dash-widget-compute)")]
+
+                        WH -->|"Batch Request\n(Read & Refresh)"| PROXY
+                        PROXY -->|"Forward Token"| AUTH
+                        AUTH --> GEN
+                        GEN -->|"1. Authorized Lookup"| MC
+                        GEN -->|"2. ONE query for all misses"| RES
+                        GEN -->|"3. Still missing? Enqueue"| RDS
+                        GEN -.->|"Return: ready or computing"| WH
+                        
+                        style MC fill:#bbf7d0,stroke:#22c55e,stroke-width:2px
+                        style RES fill:#bfdbfe,stroke:#3b82f6,stroke-width:2px
+                </div>
+            </div>
+        </section>
+
+        <!-- 3. The Authorization Sequence -->
+        <section>
+            <h2 class="text-2xl font-semibold mb-4 text-slate-800 border-b pb-2">3. Authorization & Scope Narrowing (Security Path)</h2>
+            <p class="text-slate-600 mb-6">Crucial security path demonstrating that `core-api` remains the sole authority on identity. The user's token is never substituted for an M2M token.</p>
+            
+            <div class="diagram-container">
+                <div class="mermaid">
+                    sequenceDiagram
+                        autonumber
+                        participant B as core-app (Browser)
+                        participant C as core-api
+                        participant D as dashboard-service
+                        participant M as Memcached
+
+                        B->>C: Batch Request (Authenticated Session)
+                        Note over C,D: Forwards the user's OWN bearer token.<br/>Never an M2M token.
+                        C->>D: Proxy Request
+                        D->>D: Decode token to read client_id (Resolve Tenant)
+                        D->>C: POST /user/introspect-permissions<br/>(M2M-authenticated, x-tenant-client-id)
+                        C->>C: Validate token & resolve permissions
+                        C-->>D: Return User + Permission Set
+                        D->>D: Reject if introspected clientId ≠ token clientId
+                        D->>D: Check calculator's requiredPermission
+                        D->>D: Narrow requested scope to what viewer may see
+                        D->>M: Cache Lookup using Narrowed Scope Key
+                </div>
+            </div>
+        </section>
+
+        <!-- 4. Compute & Scheduling Path -->
+        <section>
+            <h2 class="text-2xl font-semibold mb-4 text-slate-800 border-b pb-2">4. Compute, Scheduling, & Delivery</h2>
+            <p class="text-slate-600 mb-6">Showing how both scheduled placements and manual user refreshes drive computation. The Dispatch Consumer acts as a "fan-out" mechanism, converting a single time-based tick into targeted jobs for only the active widget placements.</p>
+            
+            <div class="diagram-container">
+                <div class="mermaid">
+                    flowchart TB
+                        subgraph API ["API Ingress"]
+                            REF["Refresh Endpoint"]
+                        end
+
+                        subgraph Scheduling ["Scheduling (Cron/Tick Phase)"]
+                            DISP["Schedule Registrar\n(One per schedule rate)"]
+                            CRON[("Redis\n(Repeatable Cron Jobs)")]
+                            LAY[("Dashboard Layouts")]
+                            DTICK["Dispatch Consumer\n(Fan-out worker)"]
+                        end
+
+                        subgraph Queue_Compute ["Queue & Compute (Worker Phase)"]
+                            RDS[("Redis\n(Compute Queue)")]
+                            PROC["Worker Pods\n(Shared Pool)"]
+                            RUN["Execute Calculator"]
+                        end
+
+                        subgraph Data
+                            COLS[("Domain Collections")]
+                            RES[("dashboardWidgetResults")]
+                            MC[("Memcached")]
+                        end
+
+                        DISP -->|"Registers cron pattern\n(e.g., hourly)"| CRON
+                        CRON -.->|"Triggers on schedule"| DTICK
+                        LAY -.->|"Reads active widget placements"| DTICK
+                        DTICK -->|"Enqueues targeted jobs\n(Background + Jitter)"| RDS
+                        
+                        REF -->|"Directly enqueues\n(Priority On-Demand)"| RDS
+                        
+                        RDS -->|"Pulls jobs"| PROC
+                        PROC --> RUN
+                        
+                        RUN -->|"1. Read (Secondary Preferred)"| COLS
+                        RUN -->|"2. Write row + defVersion"| RES
+                        RUN -->|"3. Write-through invalidate"| MC
+                        
+                        style RUN fill:#fef08a,stroke:#eab308,stroke-width:2px
+                        style REF fill:#ffedd5,stroke:#ea580c,stroke-width:2px
+                        style DTICK fill:#e0e7ff,stroke:#4f46e5,stroke-width:2px
+                </div>
+            </div>
+        </section>
+    </div>
+
+</body>
+</html>
