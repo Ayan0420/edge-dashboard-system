@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Dashboard Service - Diagrams Canvas</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap">
+  <style>
+    body { font-family: 'Inter', sans-serif; background: #f8fafc; color: #0f172a; margin: 0; padding: 64px 48px; }
+    .canvas-container { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 64px; }
+    .diagram-section { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 48px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+    h2 { font-size: 32px; font-weight: 800; margin-top: 0; margin-bottom: 32px; border-bottom: 2px solid #e2e8f0; padding-bottom: 16px; color: #0f172a; }
+    .mermaid { display: flex; justify-content: center; font-size: 16px; overflow-x: auto; }
+  </style>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        fontFamily: 'Inter',
+        primaryColor: '#f8fafc',
+        primaryTextColor: '#0f172a',
+        primaryBorderColor: '#cbd5e1',
+        lineColor: '#3b82f6',
+        secondaryColor: '#e0f2fe',
+        tertiaryColor: '#ffffff'
+      }
+    });
+  </script>
+</head>
+<body>
+  <div class="canvas-container">
+    <div style="text-align:center; margin-bottom: 16px;">
+      <h1 style="font-size:48px; font-weight:800; margin: 0 0 16px 0;">Dashboard Service Architecture</h1>
+      <p style="color:#475569; font-size:20px; margin:0;">Reference diagram canvas for the Dashboard Service presentation.</p>
+    </div>
+    
+    <div id="boundaries" class="diagram-section">
+      <h2>System Boundaries</h2>
+      <div class="mermaid">
+        graph LR
+          Browser["Browser<br>(CORE UI)"] --> CoreUI["CORE UI<br>dashboard-v2"]
+          CoreUI --> CoreAPI["CORE API<br>dashboard-proxy"]
+          CoreAPI -- "user bearer token" --> DashAPI["Dashboard Service - api role"]
+          DashAPI -- "enqueue on miss" --> Queue[("BullMQ queues")]
+          Queue --> DashWorker["Dashboard Service - worker role"]
+          DashWorker -- "writes" --> TenantDB[("Tenant DB")]
+          DashAPI -- "reads/writes" --> TenantDB
+      </div>
+    </div>
+
+    <div id="lifecycle" class="diagram-section">
+      <h2>Request Lifecycle</h2>
+      <div class="mermaid">
+        sequenceDiagram
+          actor Viewer
+          participant Proxy as CORE proxy
+          participant API as Dashboard Service API
+          participant Cache as widget_results
+          participant Queue as BullMQ
+          participant Worker as Dashboard Service Worker
+
+          Viewer->>Proxy: POST /widget-data
+          Proxy->>API: forward request
+          API->>Cache: read by resultKey
+          alt cache miss / stale
+              API->>Queue: enqueue job
+              API-->>Viewer: computing + retryAfterMs
+              Queue->>Worker: consume compute job
+              Worker->>Cache: run calculator, upsert row
+              Viewer->>Proxy: poll (retryAfterMs)
+              Proxy->>API: forward request
+              API->>Cache: read
+              Cache-->>API: fresh row
+              API-->>Viewer: ready + asOf
+          end
+      </div>
+    </div>
+
+    <div id="resolution" class="diagram-section">
+      <h2>Layout Resolution Flow</h2>
+      <div class="mermaid">
+        flowchart TD
+          A["Viewer requests GET /layout"] --> B{"Holds dashboardservice:read?"}
+          B -- No --> C["Forbidden"]
+          B -- Yes --> D["Walk tenant layouts in admin order"]
+          D --> E{"Layout enabled AND built<br>AND matching role?"}
+          E -- No --> D
+          E -- Yes --> F["Serve layout metadata"]
+          D -- "None matched" --> G["Serve no-dashboard state"]
+      </div>
+    </div>
+
+    <div id="data-model" class="diagram-section">
+      <h2>Data Model</h2>
+      <div class="mermaid">
+        erDiagram
+          LAYOUT ||--o{ ROW : "layout tree"
+          ROW ||--o{ CELL : "contains"
+          CELL }o--|| WIDGET : "references"
+          WIDGET }o--|| CALCULATOR : "calculatorKey"
+          CALCULATOR ||--o{ RESULT : "produces"
+      </div>
+    </div>
+
+    <div id="calculator" class="diagram-section">
+      <h2>Calculator Framework</h2>
+      <div class="mermaid">
+        graph TD
+          Def["defineCalculator()"] --> Reg["createCalculatorRegistry()"]
+          Cat1["calculators/ (KPI, Forms, Referrals)"] --> Helpers["helpers/"]
+          Cat1 --> Filters["filters/"]
+          Reg -. "Registration enforces constraints" .-> Cat1
+      </div>
+    </div>
+
+    <div id="filters" class="diagram-section">
+      <h2>Filter Flow Processing</h2>
+      <div class="mermaid">
+        flowchart LR
+          PF["Page filter applied"] --> Accept{"Widget acceptsFilters?"}
+          Accept -- "Yes" --> Source["Map to filter source"]
+          Accept -- "No" --> Ignore["Filter ignored for widget"]
+          Source --> Tier{"Closed value set?"}
+          Tier -- "Yes" --> PreWarm["Instantly returned via filterPermutations"]
+          Tier -- "No" --> OnDemand["Computed on-demand via BullMQ"]
+      </div>
+    </div>
+
+    <div id="rollout" class="diagram-section">
+      <h2>Rollout Mechanics</h2>
+      <div class="mermaid">
+        flowchart TD
+          A["Tenant accesses dashboard"] --> B{"DASHBOARD_SERVICE_ENABLED?"}
+          B -- "Off" --> C["Legacy dashboard only (safe default)"]
+          B -- "On" --> D{"Role holds dashboardservice:read?"}
+          D -- "No" --> E["BOTH dashboards disabled"]
+          D -- "Yes" --> F["v2 dashboard renders per layout"]
+      </div>
+    </div>
+  </div>
+</body>
+</html>
